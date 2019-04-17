@@ -1,6 +1,4 @@
-FROM golang:1.10.3-alpine3.8
-
-RUN apk add --no-cache --update alpine-sdk bash
+FROM golang:1.12.4-stretch
 
 COPY . /go/src/github.com/mintel/k8s-yaml-splitter
 WORKDIR /go/src/github.com/mintel/k8s-yaml-splitter
