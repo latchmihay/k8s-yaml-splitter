@@ -12,4 +12,4 @@
 *.out
 
 vendor/
-k8s-yaml-splitter
+/bin/k8s-yaml-splitter
