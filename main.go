@@ -85,7 +85,8 @@ func unmarshalObject(bytez []byte, dryRun bool, outputDir string) (error) {
 
 		var out bytes.Buffer
 		out.Write([]byte("---\n"))
-		out.Write(base.bytes)
+		out.Write(bytes.TrimRight(base.bytes, "\n"))
+		out.Write([]byte("\n"))
 
 		// write to file
 		byteWrote, err := out.WriteTo(f)
