@@ -61,13 +61,18 @@ type baseObject struct {
 	} `yaml:"metadata"`
 }
 
-func unmarshalObject(bytez []byte, dryRun bool, outputDir string) (error) {
+func unmarshalObject(bytez []byte, dryRun bool, outputDir string) error {
 	var base = baseObject{bytes: bytez}
 	if err := yaml.Unmarshal(bytez, &base); err != nil {
 		return makeUnmarshalObjectErr(err)
 	}
-	if len(base.Kind) > 0  && len(base.ApiVer) > 0 {
-		fileName := fmt.Sprintf("%s-%s.yaml", base.Kind, base.Meta.Name)
+	if len(base.Kind) > 0 && len(base.ApiVer) > 0 {
+		fileName := ""
+		if len(base.Meta.Namespace) > 0 {
+			fileName = fmt.Sprintf("%s-%s-%s.yaml", base.Kind, base.Meta.Namespace, base.Meta.Name)
+		} else {
+			fileName = fmt.Sprintf("%s-%s.yaml", base.Kind, base.Meta.Name)
+		}
 		absolutePath := path.Join(outputDir, fileName)
 		fmt.Printf("Found! type: %s | apiVersion: %s | name: %s | namespace: %s\n", base.Kind, base.ApiVer, base.Meta.Name, base.Meta.Namespace)
 		if dryRun {
@@ -98,7 +103,7 @@ func unmarshalObject(bytez []byte, dryRun bool, outputDir string) (error) {
 	return nil
 }
 
-func makeUnmarshalObjectErr( err error) error {
+func makeUnmarshalObjectErr(err error) error {
 	return errors.New("Could not parse. This likely means it is malformed YAML.")
 }
 
