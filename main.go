@@ -67,7 +67,12 @@ func unmarshalObject(bytez []byte, dryRun bool, outputDir string) (error) {
 		return makeUnmarshalObjectErr(err)
 	}
 	if len(base.Kind) > 0  && len(base.ApiVer) > 0 {
-		fileName := fmt.Sprintf("%s-%s.yaml", base.Kind, base.Meta.Name)
+		fileName := ""
+		if len(base.Meta.Namespace) > 0 {
+			fileName = fmt.Sprintf("%s-%s-%s.yaml", base.Kind, base.Meta.Namespace, base.Meta.Name)
+		} else {
+			fileName = fmt.Sprintf("%s-%s.yaml", base.Kind, base.Meta.Name)
+		}
 		absolutePath := path.Join(outputDir, fileName)
 		fmt.Printf("Found! type: %s | apiVersion: %s | name: %s | namespace: %s\n", base.Kind, base.ApiVer, base.Meta.Name, base.Meta.Namespace)
 		if dryRun {
