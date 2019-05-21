@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"github.com/pkg/errors"
 	"gopkg.in/yaml.v2"
+	"io"
 	"io/ioutil"
 	"os"
 	"path"
+	"path/filepath"
 )
 
 // ---
@@ -66,7 +68,7 @@ func unmarshalObject(bytez []byte, dryRun bool, outputDir string) (error) {
 	if err := yaml.Unmarshal(bytez, &base); err != nil {
 		return makeUnmarshalObjectErr(err)
 	}
-	if len(base.Kind) > 0  && len(base.ApiVer) > 0 {
+	if len(base.Kind) > 0 && len(base.ApiVer) > 0 {
 		fileName := fmt.Sprintf("%s-%s.yaml", base.Kind, base.Meta.Name)
 		absolutePath := path.Join(outputDir, fileName)
 		fmt.Printf("Found! type: %s | apiVersion: %s | name: %s | namespace: %s\n", base.Kind, base.ApiVer, base.Meta.Name, base.Meta.Namespace)
@@ -97,11 +99,58 @@ func unmarshalObject(bytez []byte, dryRun bool, outputDir string) (error) {
 	return nil
 }
 
-func makeUnmarshalObjectErr( err error) error {
+func makeUnmarshalObjectErr(err error) error {
 	return errors.New("Could not parse. This likely means it is malformed YAML.")
 }
 
+func parsing(r io.Reader, dryRun bool, outDir string) error {
+	chunks := bufio.NewScanner(r)
+	initialBuffer := make([]byte, 4096)     // Matches startBufSize in bufio/scan.go
+	chunks.Buffer(initialBuffer, 1024*1024) // Allow growth to 1MB
+	chunks.Split(splitYAMLDocument)
+
+	for chunks.Scan() {
+		// It's not guaranteed that the return value of Bytes() will not be mutated later:
+		// https://golang.org/pkg/bufio/#Scanner.Bytes
+		// But we will be snaffling it away, so make a copy.
+		bytes := chunks.Bytes()
+		bytes2 := make([]byte, len(bytes), cap(bytes))
+		copy(bytes2, bytes)
+		if err := unmarshalObject(bytes2, dryRun, outDir); err != nil {
+			fmt.Println(err, "parsing YAML doc")
+			return err
+		}
+	}
+	return nil
+}
+
 func main() {
+	// pipe support
+	info, _ := os.Stdin.Stat()
+	if info.Mode()&os.ModeCharDevice == 0 || info.Size() > 0 {
+		// creating .k8s-yaml-splitter directory to put the output
+		outputLocation := ".k8s-yaml-splitter"
+		currentPath, err := os.Getwd()
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		outputLocation = filepath.Join(currentPath, outputLocation)
+		if _, err := os.Stat(outputLocation); os.IsNotExist(err) {
+			err = os.Mkdir(outputLocation, 0744)
+		}
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		err = parsing(os.Stdin, false, outputLocation)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	dryRun := false
 	if len(os.Args[1:]) <= 1 {
 		fmt.Printf("Usage: %v %s %s\n", os.Args[0], "/path/to/combined-k8s.yaml", "/path/to/output/dir")
@@ -127,20 +176,9 @@ func main() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	chunks := bufio.NewScanner(bytes.NewReader(content))
-	initialBuffer := make([]byte, 4096)     // Matches startBufSize in bufio/scan.go
-	chunks.Buffer(initialBuffer, 1024*1024) // Allow growth to 1MB
-	chunks.Split(splitYAMLDocument)
-
-	for chunks.Scan() {
-		// It's not guaranteed that the return value of Bytes() will not be mutated later:
-		// https://golang.org/pkg/bufio/#Scanner.Bytes
-		// But we will be snaffling it away, so make a copy.
-		bytes := chunks.Bytes()
-		bytes2 := make([]byte, len(bytes), cap(bytes))
-		copy(bytes2, bytes)
-		if err := unmarshalObject(bytes2, dryRun, os.Args[2]); err != nil {
-			fmt.Println(err, "parsing YAML doc")
-		}
+	err = parsing(bytes.NewReader(content), dryRun, os.Args[2])
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
 }

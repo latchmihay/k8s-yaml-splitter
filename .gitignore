@@ -13,3 +13,4 @@
 
 vendor/
 k8s-yaml-splitter
+.k8s-yaml-splitter
