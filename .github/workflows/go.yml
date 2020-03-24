@@ -34,9 +34,10 @@ jobs:
         fi
 
     - name: Build
-      run: 
-        - go build -v .
-        - ls -la
+      run: go build -v .
+
+    - name: debug
+      run: ls -la 
 
     #- name: Release
     #  uses: softprops/action-gh-release@v1
