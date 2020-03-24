@@ -32,9 +32,6 @@ jobs:
     - name: Build
       run: go build -v .
 
-    - name: debug
-      run: ls -la 
-
     - name: Release
       uses: softprops/action-gh-release@v1
       if: startsWith(github.ref, 'refs/tags/')
