@@ -1,0 +1,196 @@
+#!/usr/bin/python
+
+# Atomize
+# -------
+# Inputs a multi-part yaml file consisting of multiple
+# kubernetes resources, splits them into individual files
+# with names based on the resource names, and optionally
+# (by default) organizes them by category type and generates
+# viable if simple kustomization.yaml files for easy deployment.
+
+# Newly created folders and files will be placed in the
+# current working directory.
+
+# The purpose of the script is to provide a quick and easy
+# way to make sense of the kubernetes code that is provided
+# by outside sources such as helm or istioctl, and reconfigure
+# the provided code into a consistent easily read format that
+# complies with our linting standards.
+
+# Categorization is defined by the "kinds" listed at the top of
+# the script. Any resources that are not defined will be sorted
+# into an "unknown" category folder. If any unknown types are
+# discovered or added (say from newly introduced operators with
+# additional CDR entries) they should be added into the appropriate
+# list.
+
+import yaml
+import os
+import sys
+from optparse import OptionParser
+
+# Categories for sorting
+basekinds = [
+    'Namespace',
+    'PriorityClass'
+]
+
+cdrkinds = [
+    'CustomResourceDefinition'
+]
+
+workloadkinds = [
+    'Deployment',
+    'DaemonSet',
+    'StatefulSet',
+    'ConfigMap',
+    'Secret',
+    'HorizontalPodAutoscaler',
+    'PodDisruptionBudget'
+]
+
+rbackinds = [
+    'ServiceAccount',
+    'Role',
+    'RoleBinding',
+    'ClusterRole',
+    'ClusterRoleBinding'
+]
+
+networkkinds = [
+    'Service',
+    'NetworkPolicy',
+    'MutatingWebhookConfiguration',
+    'ValidatingWebhookConfiguration',
+    'APIService',
+    'ClusterIssuer',
+    'Certificate'
+]
+
+meshkinds = [
+    'Gateway',
+    'DestinationRule',
+    'VirtualService',
+    'EnvoyFilter',
+    'Sidecar'
+]
+
+monitorkinds = [
+    'Prometheus',
+    'Alertmanager',
+    'PrometheusRule',
+    'ServiceMonitor',
+]
+
+def main():
+
+    usage = "usage: \n%prog [options] <yamlstream>\necho <yamlstream> | %prog [options]"
+    parser = OptionParser(usage=usage)
+    
+    parser.add_option('-s', '--nosort', action="store_true", dest='sort', default=True)
+    parser.add_option('-k', '--nokustomize', action="store_true", dest='kustomize', default=True)
+    (options, args) = parser.parse_args()
+
+    if args[0] != "":
+        stream = file(args[0],'r')
+    else:
+        stream = sys.stdin
+    splityaml(stream, options.sort)
+    if (options.kustomize):
+        kustomize('.', stream)
+
+
+def splityaml(stream, sort):
+    makedirs()
+    for data in yaml.safe_load_all(stream):
+        if data == None:
+            continue
+        if 'metadata' in data:
+            metadata = data['metadata']
+        else:
+            bail(data)
+            continue
+        if 'kind' in data:
+            kind = data['kind']
+        else:
+            bail(data)
+            continue
+        if 'name' in metadata:
+            name = metadata['name']
+        else:
+            bail(data)
+        if kind in basekinds:
+            directory = '.'
+        elif kind in cdrkinds:
+            directory = 'cdr'
+        elif kind in workloadkinds:
+            directory = 'workload'
+        elif kind in networkkinds:
+            directory = 'network'
+        elif kind in rbackinds:
+            directory = 'rbac'
+        elif kind in meshkinds:
+            directory = 'mesh'
+        elif kind in monitorkinds:
+            directory = 'monitoring'
+        else:
+            directory = 'other'
+        print "Name: " + name
+        print "Kind: " + kind
+        print
+
+        filename = directory + "/" + name + "-" + kind + ".yaml"
+        with open(filename, "w") as output_stream:
+            output_stream.write("---\n")
+            if 'apiVersion' in data:
+                yaml.dump({'apiVersion': data['apiVersion']}, output_stream, default_flow_style=False,default_style="")
+            yaml.dump({'kind': data['kind']}, output_stream, default_flow_style=False,default_style="")
+            yaml.dump({'metadata': data['metadata']}, output_stream, default_flow_style=False,default_style="")
+            for item in data:
+                if item not in ['kind', 'apiVersion', 'metadata']:
+                    if item == "data":
+                        yaml.dump({item: data[item]}, output_stream, default_flow_style=False,default_style="|")
+                    else:
+                        yaml.dump({item: data[item]}, output_stream, default_flow_style=False,default_style="")
+
+def makedirs():
+    for directory in ['cdr','mesh', 'workload','network','rbac','other','monitoring']:
+        if not os.path.exists(directory):
+            os.mkdir(directory)
+
+def kustomize(folder, stream):
+    # Delete empties first
+    for (directory, directorynames, filenames) in os.walk(folder):
+        if directory != folder and os.path.basename(directory).startswith('.'):
+            continue
+        if directorynames == [] and filenames == []:
+            os.rmdir(directory)
+
+    for (directory, directorynames, filenames) in os.walk(folder):
+        if directory != folder and os.path.basename(directory).startswith('.'):
+            continue
+        with open(directory + "/kustomization.yaml", "w") as output_stream:
+            output_stream.write("---\n")
+            output_stream.write("apiVersion: kustomize.config.k8s.io/v1beta1\n")
+            output_stream.write("kind: Kustomization\n")
+            output_stream.write("\n")
+            if filenames != []:
+                output_stream.write("resources:\n")
+                for filename in filenames:
+                    if filename != "kustomization.yaml" and filename != stream:
+                        output_stream.write("  - " + filename + "\n")
+            if filenames != [] and directorynames != []:
+                output_stream.write("\n")
+            if directorynames != []:
+                output_stream.write("bases:\n")
+                for directoryname in directorynames:
+                    if not directoryname.startswith("."):
+                        output_stream.write("  - " + directoryname + "\n")
+
+
+def bail(data):
+    print "Errors found for this:"
+    print data
+
+if __name__ == '__main__':
+    main()
