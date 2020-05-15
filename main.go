@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+    "strings"
 )
 
 // ---
@@ -69,7 +70,7 @@ func unmarshalObject(bytez []byte, dryRun bool, outputDir string) (error) {
 		return makeUnmarshalObjectErr(err)
 	}
 	if len(base.Kind) > 0 && len(base.ApiVer) > 0 {
-		fileName := fmt.Sprintf("%s-%s.yaml", base.Kind, base.Meta.Name)
+		fileName := fmt.Sprintf("%s-%s.yaml", strings.Replace(base.Meta.Name, ":", "-", -1), base.Kind)
 		absolutePath := path.Join(outputDir, fileName)
 		fmt.Printf("Found! type: %s | apiVersion: %s | name: %s | namespace: %s\n", base.Kind, base.ApiVer, base.Meta.Name, base.Meta.Namespace)
 		if dryRun {
