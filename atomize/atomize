@@ -8,100 +8,248 @@
 # (by default) organizes them by category type and generates
 # viable if simple kustomization.yaml files for easy deployment.
 
-# Newly created folders and files will be placed in the
-# current working directory.
+# The script's output will be stored in a new directory within
+# the current working directory. It can be manually named by
+# the user by passing the -n or --name flag, but if this is
+# not provided the name will match the name of the input
+# file, if there is one, or will simply be named 'atomized'.
 
 # The purpose of the script is to provide a quick and easy
 # way to make sense of the kubernetes code that is provided
 # by outside sources such as helm or istioctl, and reconfigure
 # the provided code into a consistent easily read format that
-# complies with our linting standards.
+# complies with our linting standards and can be easily replicated.
 
-# Categorization is defined by the "kinds" listed at the top of
-# the script. Any resources that are not defined will be sorted
+# Categorization is defined by the kubernetes resource kind in
+# combination with data from the configuration file .atomize.yaml
+# in the user's home directory. If this file does not exist it
+# will be created, but the file can be edited to add additional
+# resource types or for custom organization.
+
+# Simplified example config:
+# ---
+# categories:
+#   ordered:
+#   - base
+#   - crd
+#   base:
+#     folder: .
+#     kinds:
+#     - Namespace
+#     - PriorityClass
+#   crd:
+#     folder: crd
+#     kinds:
+#     - CustomResourceDefinition
+
+# The configuration file must contain an entry for categories, and
+# those categories must contain an 'ordered' array listing each of
+# the categories by name. Those categories should each have an entry
+# in the file that defines the folder they will be sorted into and an
+# array of the different kubernetes resources that they should contain.
+
+# Any resources that are not defined will be sorted
 # into an "unknown" category folder. If any unknown types are
 # discovered or added (say from newly introduced operators with
 # additional CDR entries) they should be added into the appropriate
 # list.
 
+# Additional sorting can be achieved by providing a sorting config
+# with the -c option.
+
+# Simplified example Config:
+# ---
+# sorting:
+#   folders:
+#     - addons
+#     - addons/grafana
+#     - istiod
+#   labels:
+#     app-grafana: 'addons/grafana'
+#     app-istiod: 'istiod'
+#     app-galley: 'istiod'
+#   resources:
+#     istio-ConfigMap: 'istiod'
+
+# The sorting config must contain a 'sorting' entry that contains an array of folders,
+# and additional mappings for labels and / or resources.
+
+# The folders list should explicitly contain any folders that you need to have created
+# for your folder structure aside from those that would normally be generated according
+# to the main config file. This includes any base folders (like 'addons' above).
+
+# Resources will still be further sorted into their usual categories within
+# these new folders.
+
+# The labels list expects labels in the format of key-value (so kubernetes label app: grafana
+# would match app-grafana above). The value given is the folder that you wish to sort those
+# labels into. In the example above anything with the label app: grafana will end up under the
+# 'addons/grafana' folder, while anything labeled app: isitod or app: gally will be placed
+# in the istiod folder.
+
+# The resources list can be used to sort specific resources that do not have reliable
+# or correct labeling when they are generated from their source. The key here should
+# be the specific name of the resource, followed by a hyphen, and then the resource kind.
+# This format matches the generated filename of the resources.
+
 import yaml
 import os
 import sys
 from optparse import OptionParser
-
-# Categories for sorting
-basekinds = [
-    'Namespace',
-    'PriorityClass'
-]
-
-cdrkinds = [
-    'CustomResourceDefinition'
-]
-
-workloadkinds = [
-    'Deployment',
-    'DaemonSet',
-    'StatefulSet',
-    'ConfigMap',
-    'Secret',
-    'HorizontalPodAutoscaler',
-    'PodDisruptionBudget'
-]
-
-rbackinds = [
-    'ServiceAccount',
-    'Role',
-    'RoleBinding',
-    'ClusterRole',
-    'ClusterRoleBinding'
-]
-
-networkkinds = [
-    'Service',
-    'NetworkPolicy',
-    'MutatingWebhookConfiguration',
-    'ValidatingWebhookConfiguration',
-    'APIService',
-    'ClusterIssuer',
-    'Certificate'
-]
-
-meshkinds = [
-    'Gateway',
-    'DestinationRule',
-    'VirtualService',
-    'EnvoyFilter',
-    'Sidecar'
-]
-
-monitorkinds = [
-    'Prometheus',
-    'Alertmanager',
-    'PrometheusRule',
-    'ServiceMonitor',
-]
+from os.path import expanduser
 
 def main():
-
     usage = "usage: \n%prog [options] <yamlstream>\necho <yamlstream> | %prog [options]"
     parser = OptionParser(usage=usage)
-    
-    parser.add_option('-s', '--nosort', action="store_true", dest='sort', default=True)
-    parser.add_option('-k', '--nokustomize', action="store_true", dest='kustomize', default=True)
+
+    parser.add_option('-s', '--nosort', action="store_false", dest='sort', help="Skip sorting logic", default=True)
+    parser.add_option('-k', '--nokustomize', action="store_false", dest='kustomize', help="Skip building kustomize files", default=True)
+    parser.add_option('-c', '--customsort', action="store", type="string", dest='customsort', help="File path for additional sorting data (yaml file)", default=None)
+    parser.add_option('-n', '--name', action="store", type="string", dest='resultdir', help="Customize the name of the output folder", default=None)
     (options, args) = parser.parse_args()
 
+    home = expanduser("~")
+    conf = load_config(home + "/.atomize.yaml")
+    if options.customsort != None: 
+        sorts = load_sorts(options.customsort)
+    else:
+        sorts = {}
+    conf['sorting'] = sorts
     if args[0] != "":
         stream = file(args[0],'r')
+        conf['resdir'] = os.path.splitext(os.path.basename(args[0]))[0]
     else:
         stream = sys.stdin
-    splityaml(stream, options.sort)
+        conf['resdir'] = 'atomized'
+    if options.resultdir != None:
+        conf['resdir'] = options.resultdir
+    if not os.path.exists(conf['resdir']):
+        os.mkdir(conf['resdir'])
+    splityaml(stream, conf, options.sort)
     if (options.kustomize):
-        kustomize('.', stream)
+        kustomize(conf['resdir'])
 
+def load_config(filename):
+    if not os.path.exists(filename):
+        create_config(filename)
+    conffile = file(filename,'r')
+    conf = yaml.load(conffile)
+    if conf == None:
+        print "Config file is not in yaml format."
+        sys.exit()
+    if 'categories' not in conf:
+        print "Config file must have 'categories' section."
+        sys.exit()
+    if 'ordered' not in conf['categories']:
+        print "'categories' section of config must contain 'ordered' section."
+        sys.exit()
+    for category in conf['categories']['ordered']:
+        print category
+        cat = conf['categories'][category]
+        print "Located in {0}".format(cat['folder'])
+        for ktype in cat['kinds']:
+            print "->{0}".format(ktype)
+        print
+    return conf
 
-def splityaml(stream, sort):
-    makedirs()
+def load_sorts(filename):
+    if not os.path.exists(filename):
+        return {}
+    sortdata = yaml.load(file(filename,'r'))
+    if sortdata == None:
+        return {}
+    if 'sorting' not in sortdata:
+        return {}
+    else:
+        return sortdata['sorting']
+
+def create_config(filename):
+    conf = {
+        'categories': {
+            'ordered': [
+                'base',
+                'crd',
+                'rbac',
+                'workload',
+                'network',
+                'mesh',
+                'monitor'
+            ],
+            'base': {
+                'folder': '.',
+                'kinds': [
+                    'Namespace',
+                    'PriorityClass',
+                ]
+            },
+            'crd': {
+                'folder': 'crd',
+                'kinds': [
+                    'CustomResourceDefinition'
+                ]
+            },
+            'rbac': {
+                'folder': 'rbac',
+                'kinds': [
+                    'ServiceAccount',
+                    'Role',
+                    'RoleBinding',
+                    'ClusterRole',
+                    'ClusterRoleBinding'
+                ]
+            },
+            'workload': {
+                'folder': 'workload',
+                'kinds': [
+                    'Deployment',
+                    'DaemonSet',
+                    'StatefulSet',
+                    'ConfigMap',
+                    'Secret',
+                    'HorizontalPodAutoscaler',
+                    'PodDisruptionBudget'
+                ]
+            },
+            'network': {
+                'folder': 'network',
+                'kinds': [
+                    'Service',
+                    'NetworkPolicy',
+                    'Policy',
+                    'MutatingWebhookConfiguration',
+                    'ValidatingWebhookConfiguration',
+                    'APIService',
+                    'ClusterIssuer',
+                    'Certificate'
+                ]
+            },
+            'mesh': {
+                'folder': 'mesh',
+                'kinds': [
+                    'Gateway',
+                    'DestinationRule',
+                    'VirtualService',
+                    'EnvoyFilter',
+                    'Sidecar'
+                ]
+            },
+            'monitor': {
+                'folder': 'monitor',
+                'kinds': [
+                    'Prometheus',
+                    'Alertmanager',
+                    'PrometheusRule',
+                    'ServiceMonitor'
+                ]
+            }
+        }
+    }
+    f = open(filename, "w")
+    f.write(yaml.dump(conf, default_flow_style=False, explicit_start=True))
+    f.close()
+
+def splityaml(stream, conf, sort):
+    makedirs(conf)
     for data in yaml.safe_load_all(stream):
         if data == None:
             continue
@@ -119,22 +267,31 @@ def splityaml(stream, sort):
             name = metadata['name']
         else:
             bail(data)
-        if kind in basekinds:
-            directory = '.'
-        elif kind in cdrkinds:
-            directory = 'cdr'
-        elif kind in workloadkinds:
-            directory = 'workload'
-        elif kind in networkkinds:
-            directory = 'network'
-        elif kind in rbackinds:
-            directory = 'rbac'
-        elif kind in meshkinds:
-            directory = 'mesh'
-        elif kind in monitorkinds:
-            directory = 'monitoring'
+
+        labels = []
+        if 'labels' in metadata:
+            for label in metadata['labels']:
+                labelstring = label + "-" + metadata['labels'][label]
+                labels.append(labelstring)
+        resourcename = name + "-" + kind
+
+        if sort:
+            directory = conf['resdir'] + '/other'
+            subdir = ''
+            if 'labels' in conf['sorting']:
+                for label in conf['sorting']['labels']:
+                    if label in labels:
+                        subdir = conf['sorting']['labels'][label]
+            if 'resources' in conf['sorting']:
+                for resource in conf['sorting']['resources']:
+                    if resource == resourcename:
+                        subdir = conf['sorting']['resources'][resource]
+            for category in conf['categories']['ordered']:
+                if kind in conf['categories'][category]['kinds']:
+                    directory = conf['resdir'] + "/" + subdir + "/" + conf['categories'][category]['folder']
         else:
-            directory = 'other'
+            directory = conf['resdir']
+
         print "Name: " + name
         print "Kind: " + kind
         print
@@ -153,12 +310,23 @@ def splityaml(stream, sort):
                     else:
                         yaml.dump({item: data[item]}, output_stream, default_flow_style=False,default_style="")
 
-def makedirs():
-    for directory in ['cdr','mesh', 'workload','network','rbac','other','monitoring']:
-        if not os.path.exists(directory):
-            os.mkdir(directory)
+def makedirs(conf):
+    if 'folders' in conf['sorting']:
+        sortdirs = conf['sorting']['folders']
+        sortdirs.append('')
+    else:
+        sortdirs = ['']
+    for sortdir in sortdirs:
+        if not os.path.exists(conf['resdir'] + "/" + sortdir):
+            os.mkdir(conf['resdir'] + "/" + sortdir)
+        for directory in conf['categories']['ordered']:
+            if directory != 'base':
+                if not os.path.exists(conf['resdir'] + "/" + sortdir + "/" + directory):
+                    os.mkdir(conf['resdir'] + "/" + sortdir + "/" + directory)
+        if not os.path.exists(conf['resdir'] + "/" + sortdir + "/other"):
+            os.mkdir(conf['resdir'] + "/" + sortdir + "/other")
 
-def kustomize(folder, stream):
+def kustomize(folder):
     # Delete empties first
     for (directory, directorynames, filenames) in os.walk(folder):
         if directory != folder and os.path.basename(directory).startswith('.'):
@@ -177,7 +345,7 @@ def kustomize(folder, stream):
             if filenames != []:
                 output_stream.write("resources:\n")
                 for filename in filenames:
-                    if filename != "kustomization.yaml" and filename != stream:
+                    if filename != "kustomization.yaml":
                         output_stream.write("  - " + filename + "\n")
             if filenames != [] and directorynames != []:
                 output_stream.write("\n")
