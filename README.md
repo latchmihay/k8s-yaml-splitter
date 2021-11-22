@@ -1,6 +1,14 @@
 # k8s-yaml-splitter
 It takes a combined kubernetes yaml config and splits it into multiple files in a folder of your choosing
 
+# Install
+```console
+# Go 1.17+
+go install github.com/latchmihay/k8s-yaml-splitter@latest
+# everything before 1.17
+go get github.com/latchmihay/k8s-yaml-splitter
+```
+
 # Usage
 
 ```console
